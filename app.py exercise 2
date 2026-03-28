@@ -1,0 +1,123 @@
+from copy import deepcopy
+from pathlib import Path
+import joblib
+import pandas as pd
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+
+SEEDED_USERS = {
+    "1": {"id": "1", "first_name": "Ava", "user_group": 11},
+    "2": {"id": "2", "first_name": "Ben", "user_group": 22},
+    "3": {"id": "3", "first_name": "Chloe", "user_group": 33},
+    "4": {"id": "4", "first_name": "Diego", "user_group": 44},
+    "5": {"id": "5", "first_name": "Ella", "user_group": 55},
+}
+
+MODEL_PATH = Path(__file__).resolve().parent / "src" / "random_forest_model.pkl"
+
+PREDICTION_COLUMNS = [
+    "city", "province", "latitude", "longitude",
+    "lease_term", "type", "beds", "baths",
+    "sq_feet", "furnishing", "smoking", "cats", "dogs",
+]
+
+app = Flask(__name__)
+CORS(app)
+
+users = deepcopy(SEEDED_USERS)
+
+def get_json_body():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return None
+    return data
+
+def clean_string(value):
+    return str(value).strip()
+
+def parse_float_field(data, field_name):
+    if field_name not in data:
+        raise KeyError(field_name)
+    return float(data[field_name])
+
+def parse_bool_field(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ["true", "1", "yes"]
+    return bool(value)
+
+@app.route("/users", methods=["GET"])
+def get_users():
+    return jsonify(list(users.values())), 200
+
+@app.route("/users", methods=["POST"])
+def create_user():
+    data = get_json_body()
+    if data is None:
+        return jsonify({"message": "Invalid JSON"}), 400
+
+    user_id = clean_string(data.get("id", ""))
+    first_name = clean_string(data.get("first_name", ""))
+    user_group = data.get("user_group")
+
+    users[user_id] = {
+        "id": user_id,
+        "first_name": first_name,
+        "user_group": int(user_group),
+    }
+
+    return jsonify(users[user_id]), 201
+
+@app.route("/users/<user_id>", methods=["PUT"])
+def update_user(user_id):
+    data = get_json_body()
+    users[user_id] = {
+        "id": user_id,
+        "first_name": clean_string(data["first_name"]),
+        "user_group": int(data["user_group"]),
+    }
+    return jsonify(users[user_id]), 200
+
+@app.route("/users/<user_id>", methods=["DELETE"])
+def delete_user(user_id):
+    users.pop(user_id, None)
+    return jsonify({"message": "Deleted"}), 200
+
+
+@app.route("/predict_house_price", methods=["POST"])
+def predict_house_price():
+    data = get_json_body()
+
+    city = clean_string(data["city"])
+    province = clean_string(data["province"])
+    latitude = parse_float_field(data, "latitude")
+    longitude = parse_float_field(data, "longitude")
+    lease_term = clean_string(data["lease_term"])
+    property_type = clean_string(data["type"])
+    beds = parse_float_field(data, "beds")
+    baths = parse_float_field(data, "baths")
+    sq_feet = parse_float_field(data, "sq_feet")
+    furnishing = clean_string(data["furnishing"])
+    smoking = clean_string(data["smoking"])
+    pets = parse_bool_field(data["pets"])
+
+    cats = pets
+    dogs = pets
+
+    sample_data = [[
+        city, province, latitude, longitude,
+        lease_term, property_type, beds, baths,
+        sq_feet, furnishing, smoking, cats, dogs
+    ]]
+
+    model = joblib.load(MODEL_PATH)
+    df = pd.DataFrame(sample_data, columns=PREDICTION_COLUMNS)
+
+    prediction = float(model.predict(df)[0])
+
+    return jsonify({"predicted_price": prediction})
+
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5050)
